@@ -19,5 +19,5 @@ This is because of the older XEN-based Hypervisor limitations, I shall repeat th
 The import and export functions work fairly well, and relatively easy to use.
 
 ## See the command line interfaces reference for both:
-[AWS EC2 CLI reference](https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/index.html)
-[GCE CLI reference](https://cloud.google.com/sdk/gcloud/reference)
+- [AWS EC2 CLI reference](https://awscli.amazonaws.com/v2/documentation/api/latest/reference/ec2/index.html)
+- [GCE CLI reference](https://cloud.google.com/sdk/gcloud/reference)
