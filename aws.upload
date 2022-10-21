@@ -1,0 +1,10 @@
+#!/bin/sh
+
+. ./khimera.config
+. ./aws.functions
+
+aws_upload_s3
+aws_import_ami
+aws_run_inst
+
+./gcdns.update aws_demo

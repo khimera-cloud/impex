@@ -1,0 +1,9 @@
+#!/bin/sh
+
+. ./khimera.config
+. ./aws.functions
+
+aws_dereg_ami `cat $AWS_IN_AMI_IDFILE`
+aws_dereg_ami `cat $AWS_OUT_AMI_IDFILE`
+aws_term_inst
+aws_clean_s3bucket

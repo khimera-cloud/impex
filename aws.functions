@@ -1,0 +1,182 @@
+#AWS Functions
+
+#IMPORT
+#aws_upload_s3()
+#aws_import_ami()
+#aws_run_inst()
+
+#EXPORT
+#aws_stop_inst()
+#aws_create_img()
+#aws_export_ami()
+#aws_download_s3()
+
+#CLEANUP
+#aws_dereg_ami() - $1 for AMI ID
+#aws_term_inst()
+#aws_clean_s3bucket()
+
+#Upload local file to AWS Helper, then S3
+aws_upload_s3() {
+AWS_HOST=$AWS_HLP_USER@$AWS_HLP_DNS
+echo aws_upload_s3 - Uploading Image to Helper
+scp $FILENAME $AWS_HOST:~
+echo aws_upload_s3 - Uncompressing Image on Helper and Uploading to S3 Bucket
+ssh $AWS_HOST "tar -xvzf $FILENAME && aws s3 cp disk.raw s3://$AWS_BUCKET/ && rm -v disk.raw $FILENAME"
+}
+
+#Import AMI from S3 bucket
+aws_import_ami() {
+echo aws_import_ami - Importing Image from Bucket to AMI
+aws ec2 import-image --disk-containers Format=raw,UserBucket="{S3Bucket=$AWS_BUCKET,S3Key=disk.raw}" > $AWS_OUTPUT
+AWS_IMPORT_TASK=`head -n 1 $AWS_OUTPUT | cut -f1`
+while [ true ]; do
+ sleep 3
+ aws ec2 describe-import-image-tasks --import-task-ids $AWS_IMPORT_TASK > $AWS_OUTPUT
+ S=`head -n 1 $AWS_OUTPUT | rev | cut -f1 | rev`
+ echo "aws_import_ami - $S"
+ case "$S" in
+  pending)
+  ;;
+  converting)
+  ;;
+  updating)
+  ;;
+  booting)
+  ;;
+  "preparing ami")
+  ;;
+  *)
+   break
+ esac
+done
+head -n 1 $AWS_OUTPUT | cut -f4 > $AWS_IN_AMI_IDFILE
+AWS_AMI=`cat $AWS_IN_AMI_IDFILE`
+echo aws_import_ami - Import Image to AMI $AWS_AMI done
+echo aws_import_ami - Deleting Image from S3 Bucket
+aws s3 rm s3://$AWS_BUCKET/disk.raw
+}
+
+#Run Imported AMI (Deploy VM from Image Template) AWS Instance
+aws_run_inst() {
+AWS_AMI=`cat $AWS_IN_AMI_IDFILE`
+echo aws_run_inst - Running Instance from AMI $AWS_AMI
+aws ec2 run-instances --image-id $AWS_AMI --instance-type t2.micro > $AWS_OUTPUT
+head -n 2 $AWS_OUTPUT  | tail -n 1 | cut -f 9 > $AWS_INST_IDFILE
+AWS_INST_ID=`cat $AWS_INST_IDFILE`
+aws ec2 modify-instance-attribute --instance-id $AWS_INST_ID --block-device-mappings "[{\"DeviceName\": \"/dev/sda1\",\"Ebs\":{\"DeleteOnTermination\":true}}]"
+while [ true ]; do
+ sleep 3
+ aws ec2 describe-instances --instance-ids $AWS_INST_ID > $AWS_OUTPUT
+ S=`tail -n 1 $AWS_OUTPUT | rev | cut -f1 | rev`
+ echo "aws_run_inst - $S"
+ case "$S" in
+  pending)
+  ;;
+  *)
+   break
+ esac
+done
+echo aws_run_inst - Instance $AWS_INST_ID started
+}
+
+#Deregister AMI and delete attached snapshot, AMI ID is $1
+aws_dereg_ami() {
+AWS_AMI=$1
+echo aws_dereg_ami - Deregistering AMI $AWS_AMI
+aws ec2 describe-images --image-ids $AWS_AMI > $AWS_OUTPUT
+SNAP=`tail -n 1 $AWS_OUTPUT | cut -f4`
+aws ec2 deregister-image --image-id $AWS_AMI
+echo aws_dereg_ami - Deleting Snapshot
+aws ec2 delete-snapshot --snapshot-id $SNAP
+echo aws_dereg_ami - AMI $AWS_AMI deleted
+}
+
+#Stop AWS Instance/VM
+aws_stop_inst() {
+AWS_INST_ID=`cat $AWS_INST_IDFILE`
+echo aws_stop_inst - Stopping Instance $AWS_INST_ID
+aws ec2 stop-instances --instance-id $AWS_INST_ID > $AWS_OUTPUT
+while [ true ]; do
+ sleep 3
+ aws ec2 describe-instances --instance-ids $AWS_INST_ID --query "Reservations[].Instances[].State.Name" $AWS_INST_ID > $AWS_OUTPUT
+ S=`cat $AWS_OUTPUT`
+ echo "aws_stop_inst - $S"
+ case "$S" in
+  stopping)
+  ;;
+  *)
+   break
+ esac
+done
+echo aws_stop_inst - Instance $AWS_INST_ID stopped
+}
+
+#Create AWS Image/AMI from Deployed Instance/VM
+aws_create_img() {
+AWS_INST_ID=`cat $AWS_INST_IDFILE`
+echo aws_create_img - Creating Image AMI from Instance $AWS_INST_ID
+aws ec2 create-image --instance-id $AWS_INST_ID --name $AWS_INST_ID-out > $AWS_OUT_AMI_IDFILE
+AWS_AMI=`cat $AWS_OUT_AMI_IDFILE`
+while [ true ]; do
+ sleep 3
+ aws ec2 describe-images --image-ids $AWS_AMI > $AWS_OUTPUT
+ S=`head -n 1 $AWS_OUTPUT | cut -f15`
+ echo "aws_create_img - $S"
+ case "$S" in
+  pending)
+  ;;
+  *)
+   break
+ esac
+done
+echo aws_create_img - AMI $AWS_AMI created
+}
+
+#Export AMI/Image Template to S3 Bucket
+aws_export_ami() {
+AWS_AMI=`cat $AWS_OUT_AMI_IDFILE`
+echo aws_export_ami - Exporting Image from AMI $AWS_AMI to Bucket
+aws ec2 export-image --disk-image-format raw --image-id $AWS_AMI --s3-export-location S3Bucket=$AWS_BUCKET > $AWS_OUTPUT
+AWS_EXPORT_TASK=`head -n 1 $AWS_OUTPUT | cut -f2`
+while [ true ]; do
+ sleep 3
+ aws ec2 describe-export-image-tasks --export-image-task-ids $AWS_EXPORT_TASK > $AWS_OUTPUT
+ S=`head -n 1 $AWS_OUTPUT | rev | cut -f2 | rev`
+ echo "aws_export_ami - $S"
+ case "$S" in
+  active)
+  ;;
+  *)
+  echo $S.raw > $AWS_EXDISK_IDFILE
+  break
+esac
+done
+TMPID=`cat $AWS_EXDISK_IDFILE`
+echo aws_export_ami - Export AMI $AWS_AMI to Bucket file $TMPID done
+}
+
+#Download RAW file from S3 Bucket to Helper, TARGZ it, then download here
+aws_download_s3() {
+AWS_HOST=$AWS_HLP_USER@$AWS_HLP_DNS
+EXFN=`cat $AWS_EXDISK_IDFILE`
+echo aws_download_s3 - Downloading Image from S3 Bucket to Helper and compressing
+ssh $AWS_HOST "aws s3 cp s3://$AWS_BUCKET/$EXFN . && mv $EXFN disk.raw && tar -czvf $FILENAME disk.raw"
+echo aws_download_s3 - Downloading Image from Helper
+scp $AWS_HOST:~/$FILENAME .
+echo aws_download_s3 - Deleting files from Helper
+ssh $AWS_HOST "rm -v disk.raw $FILENAME"
+}
+
+#Terminate (DELETE) running or stopped AWS Instance/VM
+aws_term_inst() {
+AWS_INST_ID=`cat $AWS_INST_IDFILE`
+aws ec2 terminate-instances --instance-ids $AWS_INST_ID > $AWS_OUTPUT
+echo aws_term_inst - Instance $AWS_INST_ID terminated
+}
+
+#Delete all files from S3 bucket
+aws_clean_s3bucket() {
+aws s3 rm --recursive s3://$AWS_BUCKET/
+echo aws_clean_s3bucket - Cleanup of S3 Bucket done
+}

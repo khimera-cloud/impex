@@ -1,0 +1,34 @@
+#!/bin/sh
+
+. ./khimera.config
+
+echo GCE - Uploading Image to Bucket
+
+gsutil cp $FILENAME gs://$G_BUCKET/
+
+gcloud compute images delete $G_IMGNAME -q
+
+echo GCE - Creating Image
+
+gcloud compute images create $G_IMGNAME \
+--project=$G_PROJECT \
+--source-uri=gs://$G_BUCKET/$FILENAME
+
+gsutil rm gs://$G_BUCKET/$FILENAME
+
+gcloud compute instances delete $G_INSTANCE -q
+
+echo GCE - Creating VM from Image
+
+gcloud compute instances create $G_INSTANCE \
+--project=$G_PROJECT \
+--machine-type=e2-micro \
+--metadata=serial-port-enable=TRUE \
+--tags=http-server,https-server \
+--create-disk=auto-delete=yes,boot=yes,device-name=$G_INSTANCE,image=projects/$G_PROJECT/global/images/$G_IMGNAME,mode=rw,size=10,type=projects/$G_PROJECT/zones/$G_ZONE/diskTypes/pd-balanced
+
+./gcdns.update g_demo
+
+echo GCE - Deleting Image
+
+gcloud compute images delete $G_IMGNAME -q

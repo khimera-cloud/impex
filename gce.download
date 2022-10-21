@@ -1,0 +1,32 @@
+#!/bin/sh
+
+. ./khimera.config
+
+DISKNAME=$G_INSTANCE
+
+echo GCE - Stopping VM
+gcloud compute instances stop $G_INSTANCE
+
+echo GCE - Creating Image from VM
+
+gcloud compute images delete $G_IMGNAME -q
+
+gcloud compute images create $G_IMGNAME \
+--project=$G_PROJECT \
+--source-disk $DISKNAME
+
+echo GCE - Exporting Image to Bucket
+
+gcloud compute images export \
+--image $G_IMGNAME \
+--destination-uri gs://$G_BUCKET/$FILENAME
+
+echo GCE - Downloading Image from Bucket
+
+gsutil cp gs://$G_BUCKET/$FILENAME .
+
+echo GCE - Deleting Image
+
+gsutil rm gs://$G_BUCKET/$FILENAME
+
+gcloud compute images delete $G_IMGNAME -q

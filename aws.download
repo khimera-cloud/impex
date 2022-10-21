@@ -1,0 +1,9 @@
+#!/bin/sh
+
+. ./khimera.config
+. ./aws.functions
+
+aws_stop_inst
+aws_create_img
+aws_export_ami
+aws_download_s3

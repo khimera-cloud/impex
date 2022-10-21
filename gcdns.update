@@ -1,0 +1,80 @@
+#!/bin/sh
+
+. ./khimera.config
+
+usage_f() {
+ echo usage: $0 \(g_mgmt\|aws-hlp\|g_demo\|aws_demo\) \<ip\>
+ exit
+}
+
+if [ "$1" = "" ]; then
+ usage_f
+fi
+
+case "$1" in
+  g_mgmt)
+	NAME_CHANGE=$G_MGMT_DNS
+	;;
+  aws-hlp)
+	NAME_CHANGE=$AWS_HLP_DNS
+	;;
+  g_demo)
+	NAME_CHANGE=$DNS_NAME
+	;;
+  aws_demo)
+	NAME_CHANGE=$DNS_NAME
+	;;
+  *)
+	usage_f
+esac
+
+echo Updating DNS entry
+
+if [ "$2" = "" ]; then
+ echo Reading VM IP...
+ case "$1" in
+  g_mgmt)
+	IP=`gcloud compute instances describe $G_MGMT_INST | grep natIP | cut -d: -f2 | sed 's/ //g'`
+  ;;
+  aws-hlp)
+	IP=`aws ec2 describe-instances --filters Name=instance-id,Values=$AWS_HLP_INST --query Reservations[].Instances[].PublicIpAddress`
+  ;;
+  g_demo)
+	IP=`gcloud compute instances describe $G_INSTANCE | grep natIP | cut -d: -f2 | sed 's/ //g'`
+  ;;
+  aws_demo)
+	AWS_INST_ID=`cat $AWS_INST_IDFILE`
+	IP=`aws ec2 describe-instances --filters Name=instance-id,Values=$AWS_INST_ID --query Reservations[].Instances[].PublicIpAddress`
+  esac
+else
+ IP=$2
+fi
+
+if [ "$IP" = "" ]; then
+ echo No IP supplied!
+ usage_f
+fi
+
+echo Setting IP to: $IP
+
+OLD=`gcloud beta dns --project=$G_PROJECT record-sets list --zone=$DNS_ZONE --name=$NAME_CHANGE --type=A | grep -v TTL | rev | cut -d' ' -f1 | rev`
+
+echo Old IP: $OLD
+echo New IP: $IP
+
+if [ "$OLD" = "$IP" ]; then
+ echo No IP change requested.
+ exit
+fi
+
+echo IP change starting...
+
+gcloud beta dns --project=$G_PROJECT record-sets transaction start --zone=$DNS_ZONE
+
+gcloud beta dns --project=$G_PROJECT record-sets transaction add $IP --name=$NAME_CHANGE --ttl="30" --type="A" --zone=$DNS_ZONE
+
+gcloud beta dns --project=$G_PROJECT record-sets transaction remove $OLD --name=$NAME_CHANGE --ttl="30" --type="A" --zone=$DNS_ZONE
+
+gcloud beta dns --project=$G_PROJECT record-sets transaction execute --zone=$DNS_ZONE
+
+echo DNS entry updated
